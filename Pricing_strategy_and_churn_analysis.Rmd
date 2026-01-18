@@ -1,0 +1,671 @@
+---
+title: "Pricing Strategy & Churn Analysis"
+author: "Prakhar Tomar"
+date: "2026-01-23"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## 1. Business Background and Context
+
+### 1.1 Business Objective and Problem Statement
+
+This is a subscription business selling monthly service plans for phone and internet. While the "sticker price" stays steady, effective prices change frequently through seasonal deals, discounts, and bundles meant to steal customers from competitors.
+
+Pricing mistakes compound monthly, not one time because Telco services are mostly the same, meaning customers will leave over a few dollars. If prices are too high, you lose your subscriber base to rivals; if they are too low, you won't make enough profit to maintain your cell towers or upgrade to faster technology.
+
+Our current reliance on intuition and competitor based pricing is insufficient to manage the high rate of customer churn in a competitive telecommunications market. We currently lack evidence on how price interacts with churn and profitability.
+
+### 1.2 Key Business Questions
+
+- How do Monthly Charges affect churn?
+
+- Which customers are most price sensitive?
+
+- Are we overcharging to the customers who leave?
+
+- Which segments can tolerate price increases?
+
+- Where should we offer discounts instead of losing customers?
+
+- What pricing strategy reduces churn and boosts revenue?
+
+### 1.3 Key stakeholders and Decision Context
+
+Stakeholders include Marketing and Product Managers who need to know which plans are failing, Finance Teams who worry about profit margins, and Customer Support team who need to know which discounts to offer someone trying to cancel. Even the Data and IT teams are involved because they have to turn these insights into the actual dashboards and tools that the rest of the company uses every day.
+
+Decision makers include Chief Marketing Officer or Head of Product, Pricing Manager & Retention Lead. They'll decide which plans to reprice, whom to give discounts, and where price increases are safe. These decisions directly affect churn, revenue stability, and long term customer relationships.
+
+### 1.4 Target Variables & Success Metrics
+
+The primary target is Churn (a simple "Yes" or "No"), which tells us if a customer stopped their service in the last month. The objective is to reduce churn while keeping revenue loss within acceptable limits, making retention as first priority and revenue the second.
+
+We measure success by a reduction in the Churn Rate, an increase in Customer Lifetime Value, and making more money per user over time by retaining them.
+
+## 2. Data Overview and Understanding 
+
+### 2.1 Dataset Description
+
+```{r setup, message=FALSE, warning=FALSE}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(lubridate)
+library(forcats)
+library(patchwork)
+```
+
+```{r load-data}
+telco_dataset <- read.csv("D:\\RStudio\\Pricing Strategy Analysis\\Telco_Dataset.csv")
+```
+
+```{r initial-inspection}
+glimpse(telco_dataset)
+```
+
+### 2.2 Dataset Inspection
+
+```{r summary}
+summary(telco_dataset[,c(3,6,19,20)])
+```
+
+```{r missing-value-check}
+source("D:\\RStudio\\Functions\\Missing_func.R")
+
+missing_func(telco_dataset)
+```
+
+```{r zero-variance-check}
+zero_variance_cols <- sapply(telco_dataset, function(x) {
+  length(unique(x[!is.na(x)])) == 1
+})
+
+names(zero_variance_cols[zero_variance_cols == TRUE])
+```
+
+### 2.3 Dataset Anomaly Detection
+
+```{r check-na-rows}
+na_rows <- telco_dataset[is.na(telco_dataset$TotalCharges),c(1,6,18,19,20)]
+na_rows
+```
+
+```{r check-zero-tenure}
+telco_dataset[telco_dataset$tenure == 0,20]
+```
+
+## 3. Data Cleaning & Preparation
+
+```{r fixing-NA}
+telco_cleaned <- telco_dataset %>%
+  mutate(
+    TotalCharges = ifelse(tenure == 0, 0, TotalCharges)
+  )
+```
+
+```{r Data-type}
+telco_cleaned <- telco_cleaned %>%
+  mutate(
+    gender = as.factor(gender),
+    SeniorCitizen = as.factor(SeniorCitizen),
+    Partner = as.factor(Partner),
+    Dependents = as.factor(Dependents),
+    PhoneService = as.factor(PhoneService),
+    MultipleLines = as.factor(MultipleLines),
+    InternetService = as.factor(InternetService),
+    OnlineSecurity = as.factor(OnlineSecurity),
+    OnlineBackup = as.factor(OnlineBackup),
+    DeviceProtection = as.factor(DeviceProtection),
+    TechSupport = as.factor(TechSupport),
+    StreamingTV = as.factor(StreamingTV),
+    StreamingMovies = as.factor(StreamingMovies),
+    Contract = as.factor(Contract),
+    PaperlessBilling = as.factor(PaperlessBilling),
+    PaymentMethod = as.factor(PaymentMethod),
+    Churn = as.factor(Churn),
+  )
+```
+
+```{r glimpse}
+str(telco_cleaned)
+```
+
+## 4. Exploratory Data Analysis
+
+```{r monthly-charges-distribution}
+ggplot(telco_cleaned, aes(MonthlyCharges)) +
+  geom_histogram(bins = 84, fill="#69b3a2", color = "#e9ecef") +
+  labs(
+    title = "Distribution of Monthly charges",
+    x = "Monthly Charges ($)",
+    y = "Number of customers"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r churn-price}
+ggplot(telco_cleaned, aes(x = Churn, y = MonthlyCharges)) +
+  labs(
+    title = "Effect of Price on Customer Churn",
+    x = "Customer churn",
+    y = "Monthly Charges ($)" 
+  ) +
+  geom_boxplot(fill = "beige") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r price-churn-tenure}
+telco_cleaned <- telco_cleaned %>%
+  mutate(
+    tenure_group = cut(tenure, breaks = c(-1,12,36,Inf),
+                       labels = c("0-12","12-36","36+"))
+    )
+
+ggplot(telco_cleaned, aes(x = tenure_group, y = MonthlyCharges, fill = Churn)) +
+  labs(
+    title = "Effect of Price on Churn w.r.t Tenure",
+    x = "Tenure Group (months)",
+    y = "Monthly Charges"
+  ) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## 5. Price Sensitivity Analysis
+
+```{r price influence on churn}
+Q1 <- quantile(telco_cleaned$MonthlyCharges,0.33)
+Q2 <- quantile(telco_cleaned$MonthlyCharges,0.66)
+
+telco_cleaned <- telco_cleaned %>%
+  mutate(
+    Price_group = case_when(
+      MonthlyCharges <= Q1   ~ "low",
+      MonthlyCharges <= Q2   ~ "mid",
+      TRUE                   ~ "high"
+    )
+  )
+
+telco_cleaned %>%
+  select(Price_Bucket = Price_group,Churn) %>%
+  group_by(Price_Bucket) %>%
+  summarise(Customers = n(),
+            Churned = sum(Churn == "Yes"),
+            Churn_Rate = round((Churned/Customers)*100,2)
+  ) %>%
+  arrange(desc(Churn_Rate))
+```
+
+## 6. Scenario Analysis
+
+### 6.1 Scenario A - Price increase for low risk customers
+
+```{r scenario A}
+telco_cleaned %>%
+  filter(Price_group == "low") %>%
+  select(MonthlyCharges) %>%
+  summarise(old_revenue = sum(MonthlyCharges),
+            new_revenue = sum(MonthlyCharges*1.05)
+            )
+
+```
+
+### 6.2 Scenario B - Discount for high risk customer to reduce churn
+
+**NOTE 1:** Assuming 10% discount could save 20% of the customer churn
+
+```{r Scenario B1}
+telco_cleaned %>%
+  filter(Price_group == "high" & Churn == "Yes") %>%
+  summarise(lost_revenue = sum(MonthlyCharges),
+            saved_revenue = lost_revenue*0.20,
+            discount_cost = saved_revenue*0.10,
+            net_gain = saved_revenue - discount_cost
+            )
+  
+```
+
+**NOTE 2:** Assuming 10% discount could save 10% of the customer churn
+
+```{r Scenario B2}
+telco_cleaned %>%
+  filter(Price_group == "high" & Churn == "Yes") %>%
+  summarise(lost_revenue = sum(MonthlyCharges),
+            saved_revenue = lost_revenue*0.10,
+            discount_cost = saved_revenue*0.10,
+            net_gain = saved_revenue - discount_cost
+            )
+  
+```
+
+**NOTE 3:** Assuming 10% discount could save 5% of the customer churn
+
+```{r Scenario B3}
+telco_cleaned %>%
+  filter(Price_group == "high" & Churn == "Yes") %>%
+  summarise(lost_revenue = sum(MonthlyCharges),
+            saved_revenue = lost_revenue*0.05,
+            discount_cost = saved_revenue*0.10,
+            net_gain = saved_revenue - discount_cost
+            )
+  
+```
+
+## 7. A Deeper Dive in other factors
+
+```{r churn-price-contract}
+ggplot(telco_cleaned, aes(x = Contract, y = MonthlyCharges, fill = Churn)) +
+  labs(
+    title = "Effect of Price on Churn due to Contract",
+    x = "Type of Contract",
+    y = "Monthly Charges ($)",
+    fill = "Churn"
+  ) +
+  geom_col() +
+  theme_bw() +
+  scale_fill_brewer(palette = "Set2") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r proof}
+telco_cleaned %>%
+  select(Contract_Type = Contract,Churn) %>%
+  group_by(Contract_Type) %>%
+  summarise(Customers = n(),
+            Churned = sum(Churn == "Yes"),
+            Churn_Rate = round((Churned/Customers)*100,2)
+  ) %>%
+  arrange(desc(Churn_Rate))
+```
+
+```{r service_bundles-churn}
+telco_cleaned <- telco_cleaned %>%
+  mutate(
+    count_services = rowSums(telco_cleaned[,c(10:15)] == "Yes")
+  )
+
+service_churn <- telco_cleaned %>%
+  select(count_services,Churn) %>%
+  group_by(count_services) %>%
+  summarise(Customers = n(),
+            Churned = sum(Churn == "Yes"),
+            Churn_Rate = round((Churned/Customers)*100,2)
+  ) %>%
+  arrange(count_services)
+
+service_churn
+```
+
+```{r service-churn-plot}
+ggplot(service_churn, aes(x = count_services,y = Churn_Rate)) +
+  geom_line(color = "cyan") +
+  labs(
+    title = "Effect of Services on Churn rate",
+    x = "Number of Services",
+    y = "Customer Churn Rate"
+  ) +
+  scale_x_continuous(breaks = seq(0,6,by=1)) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r payment_method-churn}
+telco_cleaned %>%
+  select(PaymentMethod,Churn,MonthlyCharges,tenure) %>%
+  group_by(PaymentMethod) %>%
+  summarise(Customers = n(),
+            median_charge = median(MonthlyCharges),
+            median_time = median(tenure),
+            Churned = sum(Churn == "Yes"),
+            Churn_Rate = round((Churned/Customers)*100,2)
+  ) %>%
+  arrange(desc(Churn_Rate))
+
+```
+
+```{r internet_type-price-churn}
+telco_cleaned %>%
+  select(InternetService,Churn,Price_group) %>%
+  group_by(InternetService,Price_group) %>%
+  summarise(Customers = n(),
+            Churned = sum(Churn == "Yes"),
+            Churn_Rate = round((Churned/Customers)*100,2),
+            .groups = "drop"
+  ) %>%
+  arrange(desc(Churn_Rate))
+```
+
+```{r revenue-at-risk}
+risk_revenue <- telco_cleaned %>%
+  filter(Churn == "Yes") %>%
+  group_by(InternetService,Contract) %>%
+  summarise(revenue_lost = sum(TotalCharges),
+            .groups = "drop") %>%
+  mutate(by_percent = round((revenue_lost/sum(revenue_lost))*100,2)) %>%
+  arrange(desc(by_percent))
+
+risk_revenue
+```
+
+```{r insights-plot}
+ggplot(risk_revenue, aes(x = InternetService, y = revenue_lost, fill = Contract)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Revenue at Risk",
+    x = "Internet Service Type",
+    y = "Lost Revenue",
+    fill = "Contract Type"
+  ) +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_brewer(palette = "Set1")
+```
+
+## 8. Key Insights
+
+1. Customer pricing is clustered, not continuous. Monthly charges show clear price tiers, indicating that customers are already segmented into different pricing plans and bundles.
+
+2. Higher prices increase churn risk, but price alone does not explain churn. Churned and retained customers have overlapping price ranges, proving that other factors such as contract type, services, and payment method also play a major role.
+
+3. Early stage customers are highly price sensitive. Customers in their first year churn at lower price levels, while long tenure customers tolerate higher prices, making tenure based pricing essential.
+
+4. Churn rises sharply beyond a price threshold. Medium and high price groups have churn rates of ~29–34%, compared to only ~16% in the low price group.
+
+5. Retention is more valuable than price increases. Retaining a small number of high paying customers generates more revenue than increasing prices for many low paying customers.
+
+6. Contract length is the strongest churn reducer. Month to month customers have a churn rate of ~43%, which drops to ~11% for one year contracts and ~3% for two year contracts.
+
+7. Partial bundles are the most dangerous segment. Customers with 1–4 services churn more than both basic users (0 services) and fully bundled users (5–6 services), showing a strong value gap.
+
+8. Payment friction causes churn independent of price. Electronic check users have extremely high churn (~45%), while auto pay methods have much lower churn (~15–19%).
+
+9. Fiber optic customers drive most revenue loss. Fiber optic users show the highest churn rates, especially in month to month contracts.
+
+10. Revenue loss is highly concentrated. 60% of lost revenue comes from fiber optic month to month customers, and 86% of total revenue loss comes from fiber optic users overall.
+
+11. Churn is a segmentation problem, not a universal problem. A small number of customer segments are responsible for most revenue loss, allowing focused and cost efficient interventions.
+
+12. Operational fixes can reduce churn without cutting prices. Contract migration and payment method changes offer high impact churn reduction at low cost.
+
+## 9. Business Strategy Recommendations 
+
+* Convert fiber optic month to month customers to long term contracts:
+Offer targeted discounts, free service bundles, or price protection to move these customers into one year or two year contracts, as this segment accounts for over 60% of total revenue loss.
+
+* Avoid price increases for fiber optic customers:
+Fiber users are highly price sensitive even at higher prices. Any price increase should be avoided for this segment simultaneously retention should focus on service quality and contract lock in instead.
+
+* Use introductory pricing for new customers:
+Since early tenure customers are highly price sensitive, offer competitive prices during the first 6–12 months and gradually increase prices as loyalty builds.
+
+* Promote full service bundles instead of just partial add-ons:
+Customers with 1–4 services show the highest churn. Bundle offers should encourage customers to either remain basic or move to full bundles (5–6 services), increasing perceived value and reducing churn.
+
+* Encourage automatic payment methods and provide incentive:
+Provide small incentives for customers to switch from electronic checks to auto pay methods, as this can reduce churn significantly without affecting pricing.
+
+* Increase prices selectively for stable DSL customers:
+High price DSL customers show very low churn, making them suitable for small, controlled price increases or premium add-on offers.
+
+* Leave low value, stable segments as it is:
+Customers with no internet services have low churn and low price sensitivity hence aggressive pricing or bundling efforts are unnecessary and may backfire.
+
+* Focus on retention of customers where revenue is at risk:
+Retention offers should be prioritized for high revenue segments (fiber optic + month-to-month), rather than being distributed evenly across all customers. This process is cost effective and increases chances of retention.
+
+## 10. Conclusion
+
+This project analyzed the relationship between pricing, customer behavior, and churn in a telecom subscription business using customer level data. The analysis showed that churn is not driven by price alone but is strongly influenced by contract type, service bundles, payment methods, and internet service type.
+
+Most revenue loss is concentrated among fiber optic customers on month to month contracts, making targeted retention far more effective than uniform price changes. Customers on long term contracts, full service bundles, and automatic payment methods show significantly lower churn, even at higher price levels.
+
+Based on these findings, the recommended strategy is to use pricing as a retention tool rather than a just a revenue enhancer, focusing on increasing contract time, bundling, and operational fixes instead of broad price increases. This approach allows the company to reduce churn, protect high value customers, and improve long term revenue stability in a highly competitive market.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
